@@ -264,6 +264,7 @@ exports.cssCompilers = cssCompilers =
           .use(libs.bootstrap())
           .set('compress', @compress)
           .set('include css', true)
+          .define('url', libs.stylus.url())
           .render callback
       result
 
