@@ -32,17 +32,19 @@ module.exports = exports = (options = {}) ->
   options.minifyBuilds ?= true
   options.pathsOnly ?= false
   libs.stylusExtends = options.stylusExtends ?= () => {};
-  
+
   jsCompilers = extend jsCompilers, options.jsCompilers || {}
 
+  options.snocketsPostProcess ?= 'seriously not doing this'
   connectAssets = module.exports.instance = new ConnectAssets options
   connectAssets.createHelpers options
   connectAssets.cache.middleware
 
+
 class ConnectAssets
   constructor: (@options) ->
     @cache = connectCache()
-    @snockets = new Snockets src: @options.src
+    @snockets = new Snockets src: @options.src snocketsPostProcess: @options.snocketsPostProcess
 
     # Things that we must cache to work efficiently with CSS compilers
     @cssSourceFiles = {}
