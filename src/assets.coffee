@@ -44,7 +44,7 @@ module.exports = exports = (options = {}) ->
 class ConnectAssets
   constructor: (@options) ->
     @cache = connectCache()
-    @snockets = new Snockets src: @options.src snocketsPostProcess: @options.snocketsPostProcess
+    @snockets = new Snockets src: @options.src, snocketsPostProcess: @options.snocketsPostProcess
 
     # Things that we must cache to work efficiently with CSS compilers
     @cssSourceFiles = {}
