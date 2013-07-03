@@ -1,4 +1,4 @@
-# [connect-assets](http://github.com/TrevorBurnham/connect-assets)
+# [connect-assets](http://github.com/adunkman/connect-assets)
 
 connectCache  = require 'connect-file-cache'
 Snockets      = require 'snockets'
@@ -6,11 +6,15 @@ Snockets      = require 'snockets'
 crypto        = require 'crypto'
 fs            = require 'fs'
 path          = require 'path'
-_             = require 'underscore'
 {parse}       = require 'url'
 
 libs = {}
 jsCompilers = Snockets.compilers
+
+extend = (dest, objs...) ->
+  for obj in objs
+    dest[k] = v for k, v of obj
+  dest
 
 module.exports = exports = (options = {}) ->
   return connectAssets if connectAssets
@@ -19,16 +23,17 @@ module.exports = exports = (options = {}) ->
   if process.env.NODE_ENV is 'production'
     options.build ?= true
     cssCompilers.styl.compress ?= true
-    options.servePath ?= ''
-  else
-    options.servePath = ''
+    cssCompilers.less.compress ?= true
+  options.servePath ?= ''
   options.buildDir ?= 'builtAssets'
   options.buildFilenamer ?= md5Filenamer
   options.buildsExpire ?= false
-  options.detectChanges ?= true
+  options.detectChanges ?= process.env.NODE_ENV isnt 'production'
   options.minifyBuilds ?= true
   options.pathsOnly ?= false
-  jsCompilers = _.extend jsCompilers, options.jsCompilers || {}
+  libs.stylusExtends = options.stylusExtends ?= () => {};
+  
+  jsCompilers = extend jsCompilers, options.jsCompilers || {}
 
   connectAssets = module.exports.instance = new ConnectAssets options
   connectAssets.createHelpers options
@@ -54,12 +59,12 @@ class ConnectAssets
     context = @options.helperContext
     srcIsRemote = @options.src.match REMOTE_PATH
     expandRoute = (shortRoute, ext, rootDir) ->
-      context.js.root = context.js.root[1..] if context.js.root[0] is '/'
+      rootDir = rootDir[1..] if rootDir[0] is '/'
       if shortRoute.match EXPLICIT_PATH
         unless shortRoute.match REMOTE_PATH
           if shortRoute[0] is '/' then shortRoute = shortRoute[1..]
       else
-        shortRoute = rootDir + '/' + shortRoute
+        shortRoute = rootDir + '/' + shortRoute if rootDir isnt ''
       if ext and shortRoute.indexOf(ext, shortRoute.length - ext.length) is -1
         shortRoute += ext
       shortRoute
@@ -69,10 +74,11 @@ class ConnectAssets
       unless route.match REMOTE_PATH
         route = @options.servePath + @compileCSS route
       return route if @options.pathsOnly
-      "<link rel='stylesheet' href='#{route}'>"
+      '<link rel="stylesheet" href="' + route + '" />'
     context.css.root = 'css'
 
-    context.js = (route) =>
+    context.js = (route, routeOptions) =>
+      loadingKeyword = ''
       route = expandRoute route, '.js', context.js.root
       if route.match REMOTE_PATH
         routes = [route]
@@ -82,7 +88,11 @@ class ConnectAssets
         routes = (@options.servePath + p for p in @compileJS route)
 
       return routes if @options.pathsOnly
-      ("<script src='#{r}'></script>" for r in routes).join '\n'
+      if routeOptions? and @options.build
+        loadingKeyword = 'async ' if routeOptions.async?
+        loadingKeyword = 'defer ' if routeOptions.defer?
+
+      ('<script ' + loadingKeyword + 'src="' + r + '"></script>' for r in routes).join '\n'
     context.js.root = 'js'
 
     context.img = (route) =>
@@ -95,7 +105,7 @@ class ConnectAssets
         route = @options.servePath + @cacheImg route
       route
     context.img.root = 'img'
-  
+
   # Synchronously lookup image and return the route
   cacheImg: (route) ->
     if !@options.detectChanges and @cachedRoutePaths[route]
@@ -116,13 +126,13 @@ class ConnectAssets
       else if alreadyCached
         return "/#{route}"
       else if @options.build
-        filename = @options.buildFilenamer(route, getExt route)
+        filename = @options.buildFilenamer(route, img)
         @buildFilenames[sourcePath] = filename
         cacheFlags = {expires: @options.buildsExpire, mtime}
         @cache.set filename, img, cacheFlags
         if @options.buildDir
           buildPath = path.join process.cwd(), @options.buildDir, filename
-          mkdirRecursive path.dirname(buildPath), 0755, ->
+          mkdirRecursive path.dirname(buildPath), 0o0755, ->
             fs.writeFile buildPath, img
         return @cachedRoutePaths[route] = "/#{filename}"
       else
@@ -136,16 +146,16 @@ class ConnectAssets
     resolvedPath = path + ""
     resolvedPath = resolvedPath.replace /url\(|'|"|\)/g, ''
     try
-      resolvedPath = img resolvedPath
+      resolvedPath = @options.helperContext.img resolvedPath
     catch e
       console.error "Can't resolve image path: #{resolvedPath}"
     return "url('#{resolvedPath}')"
-  
+
   fixCSSImagePaths: (css) ->
     regex = /url\([^\)]+\)/g
-    css = css.replace regex, @resolveImgPath
+    css = css.replace regex, @resolveImgPath.bind(@)
     return css
-    
+
   # Synchronously compile Stylus to CSS (if needed) and return the route
   compileCSS: (route) ->
     if !@options.detectChanges and @cachedRoutePaths[route]
@@ -176,7 +186,7 @@ class ConnectAssets
           else
             mtime = new Date
             @compiledCss[sourcePath] = {data: new Buffer(css), mtime}
-        
+
         if alreadyCached and @options.build
           filename = @buildFilenames[sourcePath]
           return "/#{filename}"
@@ -189,7 +199,7 @@ class ConnectAssets
           @cache.set filename, css, cacheFlags
           if @options.buildDir
             buildPath = path.join process.cwd(), @options.buildDir, filename
-            mkdirRecursive path.dirname(buildPath), 0755, ->
+            mkdirRecursive path.dirname(buildPath), 0o0755, ->
               fs.writeFile buildPath, css
           return @cachedRoutePaths[route] = "/#{filename}"
         else
@@ -218,7 +228,7 @@ class ConnectAssets
               @cache.set filename, concatenation, cacheFlags
               if buildDir = @options.buildDir
                 buildPath = path.join process.cwd(), buildDir, filename
-                mkdirRecursive path.dirname(buildPath), 0755, (err) ->
+                mkdirRecursive path.dirname(buildPath), 0o0755, (err) ->
                   fs.writeFile buildPath, concatenation
             else
               filename = @buildFilenames[sourcePath]
@@ -262,11 +272,66 @@ exports.cssCompilers = cssCompilers =
           .use(libs.bootstrap())
           .use(libs.nib())
           .use(libs.bootstrap())
+          .use(libs.stylusExtends)
           .set('compress', @compress)
           .set('include css', true)
           .define('url', libs.stylus.url())
           .render callback
       result
+
+  less:
+    optionsMap:
+      optimization: 1
+      silent: false
+      paths: []
+      color: true
+
+    patchLess: (less) ->
+      # Monkey patch importer of LESS to load files synchronously
+      less.Parser.importer = (file, paths, callback) ->
+        paths.unshift "."
+
+        i = 0
+        while i < paths.length
+          try
+            pathname = path.join(paths[i], file)
+            fs.statSync(pathname)
+            break
+          catch e
+            pathname = null
+
+          i++
+
+        if not pathname
+          throw new Error "File #{file} not found"
+
+        data = fs.readFileSync(pathname, 'utf-8')
+        new(less.Parser)(
+          paths: [path.dirname(pathname)].concat(paths)
+          filename: pathname
+        ).parse(data, (e, root) ->
+          if (e)
+            less.writeError(e)
+          callback(e, root)
+        )
+
+      less
+
+    compileSync: (sourcePath, source) ->
+      result = ""
+      libs.less or= @patchLess (require 'less')
+      options = @optionsMap
+      options.filename = sourcePath
+      options.paths = [path.dirname(sourcePath)].concat(options.paths)
+      compress = @compress ? false
+
+      callback = (err, tree) ->
+        throw err if err
+        result = tree.toCSS({compress: compress})
+
+      new libs.less.Parser(options).parse(source, callback)
+      result
+
 
 exports.jsCompilers = jsCompilers
 # ## Regexes
@@ -280,8 +345,8 @@ REMOTE_PATH = /\/\//
 getExt = (filePath) ->
   if(lastDotIndex = filePath.lastIndexOf '.') >= 0
     filePath[(lastDotIndex + 1)...]
-  ''  
-    
+  ''
+
 stripExt = (filePath) ->
   if (lastDotIndex = filePath.lastIndexOf '.') >= 0
     filePath[0...lastDotIndex]
@@ -295,11 +360,11 @@ timeEq = (date1, date2) ->
   date1? and date2? and date1.getTime() is date2.getTime()
 
 mkdirRecursive = (dir, mode, callback) ->
-  pathParts = path.normalize(dir).split '/'
-  if path.existsSync dir
+  pathParts = path.normalize(dir).split path.sep
+  if fs.existsSync dir
     return callback null
-    
-  mkdirRecursive pathParts.slice(0,-1).join('/'), mode, (err) ->
+
+  mkdirRecursive pathParts.slice(0,-1).join(path.sep), mode, (err) ->
     return callback err if err and err.errno isnt process.EEXIST
     fs.mkdirSync dir, mode
     callback()
